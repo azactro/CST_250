@@ -1,5 +1,4 @@
 # CST_250
-CST_250
 =======
 This repository is intended only for personal use by the author for Microcomputer Arch/Programming (CST 250)
 at Arizona State University's Polytechnic Campus. It is the intent of the author that all standards set forth by ASU's

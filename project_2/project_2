@@ -38,7 +38,8 @@ main:
     jal append_value
     nop
     consume_uart:
-        and $v1 $v1 $zero
+        jal check_empty_uart
+        nop
         jal get_uart
         nop
         move $a0 $v1
@@ -73,6 +74,18 @@ set_ready_bit:
     sw $t1 0($s0)
     jr $ra
     nop
+
+check_empty_uart:
+    # Numeric input not ending with '=' should be
+    # considered invalid (e.g 1234). So if we've fallen off the
+    # the UART without a '=' then handle the error
+    # appropriately.
+    lw $t0 4($s0)
+    li $t1 0b10
+    and $t0 $t0 $t1
+    bne $t0 $t1 raise_invalid
+    nop
+    jr $ra
 
 check_for_negative:
     li $t0 45

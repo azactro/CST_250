@@ -1,27 +1,42 @@
+# @author Christopher Henderson <chris@chenderson.org>
+# Arizona State University, CST 250
+# September 27th, 2015
+#
+# Assignment:
+#     Project 2:
+#         ASCII to signed 32bit converter.
+#
+# Notable Registers:
+#     $s0 UART
+#     $s1 Interim calcuated value
+#     $s2 Negative bit
+#     $v0 Ending value
+
+
 # main source file
 
 .org 0x10000000
 
+li $s0 0xF0000000
 
-and $v0 $v0 $zero
-li $i0 interrupt_service_routine
-li $t0 0b0101
-li $s0 0xF0700000
-sw $t0 0($s0)
-
-spin:
-    j spin
-    nop
-
-interrupt_service_routine:
-    lw $t0 4($s0)
-    li $t1 5
-    beq $t0 $t1 main
-    nop
-
+# This is a essential a do-while loop, due to checking
+# for the negative sign being unique to the first iteration.
 main:
-    jal set_ready_bit
-    and $s1 $s1 $zero # Interim value
+    jal poll # Tight poll loop.
+    nop
+    and $v0 $v0 $zero # Reset ending value.
+    and $s1 $s1 $zero # Reset interim value.
+    jal get_uart # Retrieved value to be placed into $v1
+    nop
+    move $a0 $v1 # Make the retrieved value the argument for the following functions.
+    jal check_for_negative
+    nop
+    jal check_for_terminator
+    nop
+    jal check_for_non_numerical
+    nop
+    jal append_value
+    nop
     consume_uart:
         and $v1 $v1 $zero
         jal get_uart
@@ -33,15 +48,43 @@ main:
         nop
         jal append_value
         nop
-        jal set_ready_bit
+        jal check_for_overflow
         nop
         j consume_uart
         nop
 
-get_uart:
-    li $t0 0xF0000000
-    lw $v1 8($t0)
+poll:
+    lw $t0 4($s0)
+    li $t1 0b10
+    and $t0 $t1 $t0
+    bne $t0 $t1 poll
+    nop
     jr $ra
+    nop
+
+get_uart:
+    lw $v1 8($s0)
+    j set_ready_bit
+    nop
+
+set_ready_bit:
+    lw $t1 0($s0)
+    ori $t1 $t1 0b10
+    sw $t1 0($s0)
+    jr $ra
+    nop
+
+check_for_negative:
+    li $t0 45
+    beq $a0 $t0 set_negative_bit
+    nop
+    move $s2 $zero
+    jr $ra
+    nop
+
+set_negative_bit:
+    li $s2 1
+    j consume_uart
     nop
 
 check_for_terminator:
@@ -49,61 +92,96 @@ check_for_terminator:
     beq $t0 $a0 success
     nop
     jr $ra
+    nop
 
 check_for_non_numerical:
     slti $t0 $a0 48  # t0 = (val < 48) ? 1 : 0
     ori $t2 $zero 57
     slt $t1 $t2 $a0  # t1 = (57 < val) ? 1 : 0
-    or $v1 $t0 $t1   # v1 = t0 | t1
-    bne $v1 $zero raise_invalid
+    or $t3 $t0 $t1   # v1 = t0 | t1
+    bne $t3 $zero raise_invalid
+    nop
+    jr $ra
+    nop
+
+append_value:
+    andi $a0 $a0 0b1111 # Mask our decimal value
+    ori $t0 $zero 10 # Operand
+    mulhi $t1 $s1 $t0 # Multiply higher order bits by ten.
+    mullo $t2 $s1 $t0 # Multiply lower order bits by ten.
+    addu $s1 $t1 $t2 # Add the higher and order bits together.
+    addu $s1 $s1 $a0 # Add our read value into least significant position.
+    jr $ra
+    nop
+
+check_for_overflow:
+    # 0x7FFFFFFF is the boundary of a signed 32 bit integer.
+    # If the value is intended to be negative, but reaches past this
+    # value, then it it will turn positive. Vice versa, positive.
+    li $t4 0x7FFFFFFF # The boundary of a 32 bit signed.
+    addu $t4 $t4 $s2 # If the negative bit is set, make the boundary one less.
+    sltu $t5 $t4 $s1 # Is s1 greater than the maximum?
+    bne $t5 $zero raise_overflow # If so, we've overflown.
     nop
     jr $ra
     nop
 
 raise_invalid:
+    lw $t0 4($s0)
+    andi $t0 $t0 0b10
+    li $ra raise_invalid
+    bne $t0 $zero get_uart
+    nop
     li $a0 0b1
     j end
     nop
 
-append_value:
-    andi $t0 $a0 0b1111
-    ori $t1 $zero 10
-    mullo $t2 $s0 $t1
-    mulhi $t3 $s0 $t1
-    addu $s1 $t2 $t3
-    addu $s1 $s1 $t0
-    jr $ra
+raise_overflow:
+    lw $t0 4($s0)
+    andi $t0 $t0 0b10
+    li $ra raise_overflow
+    bne $t0 $zero get_uart
     nop
-
-set_ready_bit:
-    li $t0 0xF0000000
-    lw $t1 0($t0)
-    li $t1 0b10
-    sw $t1 0($t0)
-    jr $ra
-    nop
-
-success:
-    move $v0 $s1
-    li $a0 0
+    li $a0 0b10
     j end
     nop
 
-end:
-    li $t0 0xF0000000
-    li $t1 0b1
-    sw $t1 0($t0)
-    ori $t2 $a0 0b110000 # Conver argument to ASCII
-    sw $t2 12($t0)
-    jal set_ready_bit
+success:
+    li $t0 1
+    beq $t0 $s2 twos_complement
     nop
-    j reset_interrupt
+    move $v0 $s1
+    li $a0 0b0
+    j end
     nop
 
-reset_interrupt:
-    li $t0 5
-    sw $t0 0($s0)
-    li $t1 1
-    sw $t0 4($s0)
+twos_complement:
+    nor $s1 $s1 $zero
+    addiu $v0 $s1 1
+    li $a0 0b0
+    j end
+    nop
+
+write_to_uart:
+    lw $t4 4($s0)
+    andi $t4 $t4 0b01
+    beq $t4 $zero write_to_uart
+    nop
+    sw $a0 12($s0)
+    lw $t4 0($s0)
+    ori $t4 $t4 0b01
+    sw $t4 0($s0)
+    jr $ra
+    nop
+
+end:
+    ori $a0 $a0 0b110000 # Convert argument to ASCII
+    jal write_to_uart
+    nop
+    li $a0 10
+    jal write_to_uart
+    nop
+    jal set_ready_bit
+    nop   
     j main
     nop
